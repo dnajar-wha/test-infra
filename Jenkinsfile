@@ -3,10 +3,10 @@ pipeline {
 
     stages {
 
-        stage('Build Image') {
+        stage('Build') {
             steps {
                 sh '''
-                docker build -t myapp:latest app
+                docker build -t myapp:latest /workspace/app
                 '''
             }
         }
@@ -15,13 +15,20 @@ pipeline {
             steps {
                 sh '''
                 docker rm -f app1 || true
-                docker rm -f app2 || true
 
                 docker run -d \
                   --name app1 \
                   --network nginx-haproxy-jenkins-lab_default \
                   myapp:latest
-                
+                '''
+            }
+        }
+
+        stage('Deploy App2') {
+            steps {
+                sh '''
+                docker rm -f app2 || true
+
                 docker run -d \
                   --name app2 \
                   --network nginx-haproxy-jenkins-lab_default \
@@ -29,5 +36,6 @@ pipeline {
                 '''
             }
         }
+
     }
 }
