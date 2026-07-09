@@ -1,6 +1,10 @@
 # Environment files with secrets
 .env
 
+# SSH keys (deploy keys)
+jenkins/deploy-key
+*.pem
+
 # Docker
 *.log
 .docker/

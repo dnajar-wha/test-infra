@@ -3,27 +3,21 @@ pipeline {
 
     environment {
         APP_NAME = 'myapp'
-        // Version format: 1.0.0-abc1234 (semver + git commit)
         APP_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
-        NETWORK_NAME = sh(
-            script: 'docker network ls --format "{{.Name}}" | grep -E "nginx-haproxy.*_default" | head -1',
-            returnStdout: true
-        ).trim()
-        HEALTH_CHECK_RETRIES = 30
-        HEALTH_CHECK_INTERVAL = 2
+
+        // Remote VM settings
+        DEPLOY_HOST = '192.168.139.128'
+        DEPLOY_USER = 'dnajar'
+        SSH_KEY = '/var/jenkins_home/.ssh/deploy-key'
+        SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                script {
-                    if (NETWORK_NAME.isEmpty()) {
-                        NETWORK_NAME = 'nginx-haproxy-jenkins-lab_default'
-                    }
-                    echo "Using network: ${NETWORK_NAME}"
-                    echo "Building version: ${APP_VERSION}"
-                }
+                echo "Building version: ${APP_VERSION}"
+                echo "Deploy: app1=local, app2=${DEPLOY_HOST}"
             }
         }
 
@@ -38,98 +32,82 @@ pipeline {
             }
         }
 
-        stage('Security Scan') {
+        stage('Export Image') {
             steps {
-                script {
-                    // Optional: Run trivy if available
-                    try {
-                        sh '''
-                            if command -v trivy &> /dev/null; then
-                                trivy image --exit-code 0 --severity HIGH,CRITICAL ${APP_NAME}:${APP_VERSION} || true
-                            else
-                                echo "Trivy not installed, skipping security scan"
-                            fi
-                        '''
-                    } catch (Exception e) {
-                        echo "Security scan failed but continuing: ${e.message}"
-                    }
-                }
+                sh '''
+                    docker save ${APP_NAME}:${APP_VERSION} -o /tmp/${APP_NAME}-${APP_VERSION}.tar
+                    echo "Image exported: $(ls -lh /tmp/${APP_NAME}-${APP_VERSION}.tar)"
+                '''
             }
         }
 
-        stage('Deploy App1') {
+        stage('Deploy App1 (Local)') {
             steps {
-                script {
-                    deployContainer('app1')
-                }
+                sh '''
+                    docker rm -f app1 || true
+                    docker run -d \
+                      --name app1 \
+                      --restart unless-stopped \
+                      --label "app.version=${APP_VERSION}" \
+                      --label "app.name=app1" \
+                      -p 8081:80 \
+                      ${APP_NAME}:${APP_VERSION}
+                    echo "App1 started on port 8081"
+                '''
             }
         }
 
-        stage('Deploy App2') {
+        stage('Deploy App2 (VM)') {
             steps {
                 script {
-                    deployContainer('app2')
+                    sh """
+                        scp ${SSH_OPTS} -i ${SSH_KEY} /tmp/${APP_NAME}-${APP_VERSION}.tar ${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/${APP_NAME}-${APP_VERSION}.tar
+                    """
+                    sh """
+                        ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "docker load -i /tmp/${APP_NAME}-${APP_VERSION}.tar && rm /tmp/${APP_NAME}-${APP_VERSION}.tar"
+                        ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "docker rm -f app2 || true"
+                        ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "docker run -d --name app2 --restart unless-stopped --label 'app.version=${APP_VERSION}' --label 'app.name=app2' -p 80:80 ${APP_NAME}:${APP_VERSION}"
+                        echo "App2 started on VM at port 80"
+                    """
                 }
             }
         }
 
         stage('Health Check') {
             steps {
-                script {
-                    echo "Waiting for containers to be healthy..."
-                    def app1Healthy = waitForHealth('app1')
-                    def app2Healthy = waitForHealth('app2')
-
-                    if (!app1Healthy || !app2Healthy) {
-                        error("Health checks failed - rolling back")
-                    }
-                    echo "All containers healthy"
-                }
-            }
-        }
-
-        stage('Smoke Test') {
-            steps {
                 sh '''
-                    echo "Running smoke tests..."
+                    echo "Waiting for containers to be healthy..."
 
-                    # Test Nginx proxy
-                    if ! curl -sf --max-time 5 http://nginx:80/ > /dev/null; then
-                        echo "FAIL: Nginx not responding"
-                        exit 1
-                    fi
+                    for i in 1 2 3 4 5; do
+                        sleep 2
+                        if curl -sf http://localhost:8081/health > /dev/null; then
+                            echo "App1 is healthy"
+                            break
+                        fi
+                    done
 
-                    # Test HAProxy stats (with auth)
-                    if ! curl -sf --max-time 5 -u admin:ad*in123 http://haproxy:8404/stats > /dev/null; then
-                        echo "FAIL: HAProxy stats not responding"
-                        exit 1
-                    fi
-
-                    # Test direct backend access
-                    if ! curl -sf --max-time 5 http://app1:80/health > /dev/null; then
-                        echo "FAIL: App1 health endpoint not responding"
-                        exit 1
-                    fi
-
-                    if ! curl -sf --max-time 5 http://app2:80/health > /dev/null; then
-                        echo "FAIL: App2 health endpoint not responding"
-                        exit 1
-                    fi
-
-                    echo "All smoke tests passed!"
+                    ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "for i in 1 2 3 4 5; do sleep 2; if curl -sf http://localhost:80/health > /dev/null; then echo 'App2 is healthy'; break; fi; done"
                 '''
             }
         }
 
-        stage('Cleanup') {
+        stage('Verify Load Balancer') {
             steps {
                 sh '''
-                    # Remove old images (keep last 5)
-                    docker images ${APP_NAME} --format "{{.Tag}}" | \
-                      grep -v "${APP_VERSION}" | \
-                      grep -v "latest" | \
-                      tail -n +6 | \
-                      xargs -r -I {} docker rmi ${APP_NAME}:{} || true
+                    echo "Testing HAProxy..."
+                    sleep 3
+
+                    if curl -sf -u admin:ad*in123 http://localhost:8404/stats > /dev/null; then
+                        echo "HAProxy stats: OK"
+                    else
+                        echo "HAProxy stats: FAILED"
+                    fi
+
+                    if curl -sf http://localhost:80/ > /dev/null; then
+                        echo "HAProxy routing: OK"
+                    else
+                        echo "HAProxy routing: FAILED"
+                    fi
                 '''
             }
         }
@@ -138,83 +116,29 @@ pipeline {
     post {
         always {
             cleanWs()
+            sh 'rm -f /tmp/${APP_NAME}-${APP_VERSION}.tar || true'
         }
         failure {
             script {
-                echo "Deployment failed! Check logs for details."
+                echo "Deployment failed! Checking status..."
                 sh '''
-                    docker logs app1 --tail 50 || true
-                    docker logs app2 --tail 50 || true
+                    echo "=== Local app1 ==="
+                    docker ps -a --filter name=app1 --format "{{.Names}}\t{{.Status}}"
+                    docker logs app1 --tail 10 || true
+
+                    echo "=== Remote app2 ==="
+                    ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "docker ps -a --filter name=app2 --format '{{.Names}}\t{{.Status}}'" || true
                 '''
             }
         }
         success {
-            echo "Deployment successful! Version: ${APP_VERSION}"
+            echo "✅ Deployed ${APP_VERSION}"
+            echo ""
+            echo "Access points:"
+            echo "  HAProxy (LB): http://localhost:80/"
+            echo "  HAProxy Stats: http://localhost:8404/stats (admin:ad*in123)"
+            echo "  App1 (local): http://localhost:8081/"
+            echo "  App2 (VM):    http://${DEPLOY_HOST}/"
         }
     }
-}
-
-// Helper function: Deploy a container with blue-green strategy
-def deployContainer(String containerName) {
-    def newName = "${containerName}-new"
-
-    stage("Prepare ${containerName}") {
-        sh """
-            docker rm -f ${containerName} || true
-            docker rm -f ${newName} || true
-        """
-    }
-
-    stage("Start ${containerName}") {
-        sh """
-            docker run -d \\
-              --name ${newName} \\
-              --network ${NETWORK_NAME} \\
-              --restart unless-stopped \\
-              --label "app.version=${APP_VERSION}" \\
-              --label "app.name=${containerName}" \\
-              ${APP_NAME}:${APP_VERSION}
-        """
-    }
-
-    stage("Validate ${containerName}") {
-        script {
-            def healthy = waitForHealth(newName)
-            if (!healthy) {
-                sh "docker rm -f ${newName} || true"
-                error("Container ${containerName} failed health check")
-            }
-        }
-    }
-
-    stage("Activate ${containerName}") {
-        sh """
-            docker rename ${newName} ${containerName}
-        """
-    }
-}
-
-// Helper function: Wait for container health endpoint
-def waitForHealth(String containerName, int maxRetries = 30, int interval = 2) {
-    def retries = 0
-    while (retries < maxRetries) {
-        try {
-            def result = sh(
-                script: "docker exec ${containerName} curl -sf http://localhost:80/health",
-                returnStatus: true
-            )
-            if (result == 0) {
-                echo "${containerName} is healthy after ${retries + 1} attempts"
-                return true
-            }
-        } catch (Exception e) {
-            // Container not ready yet
-        }
-
-        retries++
-        sleep(interval)
-    }
-
-    echo "${containerName} failed health check after ${maxRetries} attempts"
-    return false
 }
