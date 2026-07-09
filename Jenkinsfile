@@ -32,11 +32,27 @@ pipeline {
             }
         }
 
+        stage('Build API') {
+            steps {
+                sh '''
+                    docker build -t api-service:${APP_VERSION} ./api
+                '''
+            }
+        }
+
         stage('Export Image') {
             steps {
                 sh '''
                     docker save ${APP_NAME}:${APP_VERSION} -o /tmp/${APP_NAME}-${APP_VERSION}.tar
                     echo "Image exported: $(ls -lh /tmp/${APP_NAME}-${APP_VERSION}.tar)"
+                '''
+            }
+        }
+
+        stage('Export API Images') {
+            steps {
+                sh '''
+                    docker save api-service:${APP_VERSION} -o /tmp/api-service.tar
                 '''
             }
         }
@@ -69,6 +85,20 @@ pipeline {
                         ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "docker run -d --name app2 --restart unless-stopped --label 'app.version=${APP_VERSION}' --label 'app.name=app2' -p 80:80 ${APP_NAME}:${APP_VERSION}"
                         echo "App2 started on VM at port 80"
                     """
+                    // API
+                    sh """
+                        scp ${SSH_OPTS} -i ${SSH_KEY} /tmp/api-service.tar \
+                            ${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/api-service.tar
+
+                        ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} \
+                            "docker load -i /tmp/api-service.tar && rm /tmp/api-service.tar"
+
+                        ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} \
+                            "docker rm -f api || true"
+
+                        ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} \
+                            "docker run -d --name api --restart unless-stopped -p 3000:3000 api-service:${APP_VERSION}"
+                    """
                 }
             }
         }
@@ -87,6 +117,7 @@ pipeline {
                     done
 
                     ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "for i in 1 2 3 4 5; do sleep 2; if curl -sf http://localhost:80/health > /dev/null; then echo 'App2 is healthy'; break; fi; done"
+                    ssh ${SSH_OPTS} -i ${SSH_KEY} ${DEPLOY_USER}@${DEPLOY_HOST} "curl -sf http://localhost:3000/api/health && echo 'API is healthy'"
                 '''
             }
         }
@@ -108,6 +139,12 @@ pipeline {
                     else
                         echo "HAProxy routing: FAILED"
                     fi
+
+                    if curl -sf http://localhost:8080/api/health > /dev/null; then
+                        echo "API route: OK"
+                    else
+                        echo "API route: FAILED"
+                    fi
                 '''
             }
         }
@@ -117,6 +154,7 @@ pipeline {
         always {
             cleanWs()
             sh 'rm -f /tmp/${APP_NAME}-${APP_VERSION}.tar || true'
+            sh 'rm -f /tmp/api-service.tar || true'
         }
         failure {
             script {
@@ -139,6 +177,7 @@ pipeline {
             echo "  HAProxy Stats: http://localhost:8404/stats (admin:ad*in123)"
             echo "  App1 (local): http://localhost:8081/"
             echo "  App2 (VM):    http://${DEPLOY_HOST}/"
+            echo "  API (VM):     http://${DEPLOY_HOST}:3000/api/"
         }
     }
 }
