@@ -1,22 +1,58 @@
 services:
   app1:
-    image: myapp:latest
+    image: myapp:${APP_VERSION:-latest}
     container_name: app1
-  
+    restart: unless-stopped
+    labels:
+      - "app.version=${APP_VERSION:-latest}"
+      - "app.name=app1"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - app-network
+
   app2:
-    image: myapp:latest
+    image: myapp:${APP_VERSION:-latest}
     container_name: app2
+    restart: unless-stopped
+    labels:
+      - "app.version=${APP_VERSION:-latest}"
+      - "app.name=app2"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - app-network
 
   haproxy:
     image: haproxy:latest
     container_name: haproxy
     ports:
       - "8404:8404"
+    environment:
+      - HAPROXY_STATS_USER=${HAPROXY_STATS_USER:-admin}
+      - HAPROXY_STATS_PASS=${HAPROXY_STATS_PASS:-admin}
     volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
-      - app1
-      - app2
+      app1:
+        condition: service_healthy
+      app2:
+        condition: service_healthy
+    networks:
+      - app-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   nginx:
     image: nginx:latest
@@ -24,9 +60,16 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - haproxy
+    networks:
+      - app-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   jenkins:
     build:
@@ -35,10 +78,22 @@ services:
     ports:
       - "8081:8080"
       - "50000:50000"
+    environment:
+      - JENKINS_USER=${JENKINS_USER:-admin}
+      - JENKINS_TOKEN=${JENKINS_TOKEN:-}
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./:/workspace
+      - ./:/workspace:ro
+    networks:
+      - app-network
+    depends_on:
+      - haproxy
+      - nginx
 
 volumes:
   jenkins_home:
+
+networks:
+  app-network:
+    driver: bridge

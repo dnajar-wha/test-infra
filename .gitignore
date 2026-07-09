@@ -1,0 +1,25 @@
+# Environment files with secrets
+.env
+
+# Docker
+*.log
+.docker/
+
+# Jenkins
+.jenkins/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
