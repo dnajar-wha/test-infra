@@ -1,4 +1,4 @@
-const days = ["Sunday", "Monday","Tuesday","Wenesday", "Thursday", "Friday", "Saturday"]
+const days = ["Sunday", "Monday","Tuesday","Wednesday", "Thursday", "Friday", "Saturday"]
 
 const options = { 
   weekday: 'long', 
@@ -33,6 +33,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const intervalId = setInterval(() => {
         console.log(`This runs every ${seconds} seconds.`);
-        console.log(getTodaysDate()) 
+        getTodaysDate() 
     }, seconds * 1000);
 });
