@@ -8,8 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy application files
 COPY . /usr/share/nginx/html/
 
-# Copy nginx config with health endpoint support
-COPY nginx-health.conf /etc/nginx/conf.d/health.conf
+# Remove default config and create custom one with health endpoint
+RUN rm -f /etc/nginx/conf.d/default.conf
+
+COPY nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 80
 
