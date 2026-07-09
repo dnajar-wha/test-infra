@@ -18,7 +18,7 @@ pipeline {
 
                 docker run -d \
                   --name app1 \
-                  --network nginx-haproxy-jenkins-lab_default \
+                  --network nginx-haproxy-jenkins-lab \
                   myapp:latest
                 '''
             }
@@ -31,7 +31,7 @@ pipeline {
 
                 docker run -d \
                   --name app2 \
-                  --network nginx-haproxy-jenkins-lab_default \
+                  --network nginx-haproxy-jenkins-lab \
                   myapp:latest
                 '''
             }
