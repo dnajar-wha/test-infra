@@ -24,7 +24,7 @@ pipeline {
         stage('Build') {
             steps {
                 sh '''
-                    docker build \
+                    docker build --no-cache \
                       -t ${APP_NAME}:${APP_VERSION} \
                       -t ${APP_NAME}:latest \
                       /workspace/app

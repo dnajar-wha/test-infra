@@ -90,6 +90,8 @@ services:
     depends_on:
       - haproxy
       - nginx
+    group_add:
+      - "0"  # Add root group to access docker.sock on Docker Desktop
 
 volumes:
   jenkins_home:
