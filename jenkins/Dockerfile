@@ -5,7 +5,8 @@ USER root
 # Install Docker CLI, SSH client, and git
 RUN apt-get update && \
     apt-get install -y docker.io openssh-client git && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    usermod -aG docker jenkins
 
 # Add SSH key for remote deployment
 COPY deploy-key /var/jenkins_home/.ssh/deploy-key
