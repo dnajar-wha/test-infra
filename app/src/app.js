@@ -12,7 +12,6 @@ const options = {
 const seconds = 60; 
 
 const getTodaysDate = () => {
-    const el = document.getElementById('date_time');
     const date = new Date();
     const year = date.getFullYear()
     const month = date.getMonth();
@@ -22,17 +21,52 @@ const getTodaysDate = () => {
     const hours = date.getHours()
     const minutes = date.getMinutes()
 
-    console.log(date.toLocaleString('en-US', options))
-    el.innerText = date.toLocaleString('en-US', options)
+    return date.toLocaleString('en-US', options);
 }
 
 
-document.addEventListener("DOMContentLoaded", () => {
-    console.log("The DOM is fully loaded!");
-    getTodaysDate()
+const template = `
+<div>
+    {{#if showUsers}}
+        <h2>{{title}}</h2>
+        <ul>
+            {{#each users}}
+                <li>
+                    {{#if active}}
+                        <user-card name="{{name}}" email="{{email}}" />
+                    {{else}}
+                        ❌ {{name}} (inactive)
+                    {{/if}}
+                </li>
+            {{/each}}
+        </ul>
+    {{else}}
+        <p>Users hidden</p>
+    {{/if}}
+    <small>Date: {{date}}</small>
+</div>
+`;
 
-    const intervalId = setInterval(() => {
-        console.log(`This runs every ${seconds} seconds.`);
-        getTodaysDate() 
-    }, seconds * 1000);
+const data = {
+    showUsers: true,
+    title: "Team Members",
+    users: [
+        { name: "Alice", email: "alice@example.com", active: true },
+        { name: "Bob", email: "bob@example.com", active: false },
+        { name: "Charlie", email: "charlie@example.com", active: true }
+    ],
+    date: getTodaysDate()
+};
+
+component('user-card', {
+    template: `
+        <div class="card">
+            <strong>✅{{name}}</strong>
+            <span>{{email}}</span>
+        </div>
+    `,
+    props: ['name', 'email']
 });
+
+const result = compile(template, data);
+document.getElementById('app').innerHTML = result;
